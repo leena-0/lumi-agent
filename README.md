@@ -423,3 +423,79 @@ app/
     - [] 내 repo에 권한(Grant) 부여
     - [] 연동만 해두면 이후 **PR을 열 때마다 자동으로 리뷰 코멘트**가 달림
     - [] 리뷰 제안 프롬프트를 바탕으로 **코드 자동 수정 커밋**까지 만들어 주는 것 확인 (fix: apply CodeRabbit auto-fixes)
+
+### 이번 시간 강의의 핵심
+- 검사는 "로컬 pre-commit(빠른 1차 검사) → GitHub CI(최종 수문장)" 2중으로 — 둘 다 같은 Ruff/pytest를 돌리므로 로컬에서 통과하면 CI도 통과한다
+- 자동 수정이 안 되는 것(Unsafe)과 AI 리뷰는 참고일 뿐, 최종 판단은 사람이 한다
+
+---
+
+## 강의 노트 5강
+- 핵심 목표 : 클라우드 배포(CD) — main에 머지되면 **Docker 이미지가 자동으로 빌드되고 GCP 서버에 배포**되게 만들기
+
+### TODO
+- [v] 사전 확인
+    - [v] Docker Desktop 설치 & 실행
+        - macOS: https://docs.docker.com/desktop/setup/install/mac-install/ (Apple Silicon/Intel 구분)
+        - Windows: https://docs.docker.com/desktop/setup/install/windows-install/ (**WSL2 필요** — 설치 중 안내대로 활성화)
+        - 확인: `docker version` (Client/Server 둘 다 나오면 OK — Server가 없으면 Docker Desktop 앱을 실행할 것)
+- [v] Docker 파일 3종 작성 (아래 해설 참고)
+    - [v] `Dockerfile` — 멀티 스테이지 빌드 + non-root 유저 + 헬스체크
+    - [v] `.dockerignore` — .venv/.git/.env 등 제외
+    - [v] `docker-compose.yml` — 포트·환경변수·헬스체크·재시작 정책
+- [v] 로컬 실습 — 이미지 빌드 & 실행 (mac/Windows 공통, 아래 "로컬 실습" 섹션 참고)
+    - [v] Docker Desktop 실행
+    - [v] `docker build -t lumi-agent .` — 이미지 빌드
+    - [v] `docker images` — 만들어진 이미지 확인
+    - [v] `docker run -d -p 8000:8000 --env-file .env lumi-agent` — 컨테이너 실행
+    - [v] `docker ps` — 실행 중인 컨테이너 확인
+    - [v] `docker stop <컨테이너ID>` — 컨테이너 종료
+    - [v] 브라우저로 http://localhost:8000/ui 접속 확인
+
+    - 아래 내용은 집에서 해보기
+        - [] `docker compose up -d --build` - Docker Compose로 재실행
+        - [] `docker compose logs -f` - 실행 로그 확인
+        - [] `docker compose down` - 컨테이너 종료
+        - [] 브라우저로 http://localhost:8000/ui 접속 확인
+- [v] GCP 서버 준비 (Compute Engine)
+    - [v] gcloud CLI 설치 & 초기화 (SSH 접속·키 생성에 필요)
+        - 설치: https://cloud.google.com/sdk/docs/install (mac은 `brew install --cask google-cloud-sdk` 도 가능)
+        - `gcloud init` → 브라우저로 Google 로그인 → 프로젝트 선택
+    - [v] VM 인스턴스 생성: 이름 `lumi-server` / 리전 asia-northeast3(서울) / **e2-medium** / **Ubuntu 22.04 LTS** / 네트워크 태그 `lumi-server`
+        > 💸 e2-medium은 무료 등급이 아님 (결제 계정 필요, 켜둔 시간만큼 과금) → **실습 후 VM 삭제**할 것!
+    - [v] 방화벽 규칙: VPC 네트워크 → 방화벽 → 규칙 만들기 — **tcp:8000 허용** · 대상 태그 `lumi-server` · 소스 `0.0.0.0/0` (VM의 태그와 규칙의 대상 태그가 일치해야 적용됨!)
+    - [v] SSH 접속: `gcloud compute ssh --zone "asia-northeast3-a" "appuser@lumi-server" --project "<내 프로젝트ID>" --quiet` (appuser = 배포용 일반 계정, gcloud가 자동 생성)
+        > ⚠️ 최초 접속 시 SSH 키(`~/.ssh/google_compute_engine`)가 자동 생성됨.
+    - [v] 서버에 Docker 설치 (설치 후 **재접속해야** sudo 없이 docker 사용 가능)
+      ```bash
+      sudo apt-get update && sudo apt-get install -y docker.io
+      sudo systemctl enable --now docker
+      sudo usermod -aG docker $USER
+      sudo curl -L "https://github.com/docker/compose/releases/latest/download/docker-compose-linux-x86_64" -o /usr/local/bin/docker-compose
+      sudo chmod +x /usr/local/bin/docker-compose
+      exit   # docker 그룹 적용을 위해 재접속
+      ```
+    - [v] `docker run hello-world` — "Hello from Docker!" 나오면 준비 완료
+- [v] GitHub Secrets **6개** 등록 (Settings → Secrets and variables → Actions)
+    - [v] 기존 3개 (4강에서 등록): `UPSTAGE_API_KEY` / `SUPABASE_URL` / `SUPABASE_KEY`
+    - [v] `GCE_HOST` — VM 외부 IP (VM 인스턴스 목록에서 확인)
+    - [v] `GCE_USERNAME` — SSH 사용자명 (예: `appuser`)
+    - [v] `GCE_SSH_KEY` — SSH **개인키 전체 내용**
+        - macOS/Linux: `cat ~/.ssh/google_compute_engine`
+        - Windows PowerShell: `Get-Content "$env:USERPROFILE\.ssh\google_compute_engine"`
+        - `-----BEGIN ... KEY-----` 부터 `-----END ... KEY-----` 까지 통째로 복사
+- [v] CD 파이프라인 연결
+    - [v] 새 브랜치: `git checkout -b feat/cd`
+    - [v] `.github/workflows/cd.yml` 작성 (아래 해설 참고)
+    - [v] add / commit / push → PR 생성 → CI 통과 확인 → **Merge**
+      ```bash
+      git add Dockerfile .dockerignore docker-compose.yml .github/workflows/cd.yml
+      git commit -m "feat: cd 파이프라인 추가"
+      git push --set-upstream origin feat/cd
+      ```
+    - [v] Merge 되면 Actions 탭에서 **Lumi Agent CD** 실행 확인 (Build & Push to GHCR → Deploy to Compute Engine → Summary)
+- [v] 배포 확인
+    - [v] 브라우저에서 `http://<VM 외부IP>:8000` 접속 (루미 서비스!)
+    - [v] 서버 SSH 접속 후 `docker ps -a` — STATUS `Up`, PORTS `0.0.0.0:8000->8000` 이면 정상
+    - [] `docker logs <컨테이너ID> -f` — 실시간 로그 확인 (ID는 앞 6글자만 써도 됨)
+- [] (참고) 롤백: Actions → Lumi Agent CD → **Run workflow** → `rollback` 체크 → 이전 이미지로 자동 복구
